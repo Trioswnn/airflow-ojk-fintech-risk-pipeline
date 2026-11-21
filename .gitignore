@@ -1,0 +1,39 @@
+# =============================================================================
+# .gitignore - Repository GitHub Fokus Code, ETL Lineage & Dataset Airflow
+# =============================================================================
+
+# Paket pengumpulan dosen, Google Drive tim, dokumen laporan & instruksi kuliah
+BERKAS_PENGUMPULAN_UAS_KELOMPOK_3/
+FOLDER_SHARE_KE_REKAN_TIM/
+docs/
+PROJECT UAS.pdf
+Instruksi_Projek_UAS.txt
+
+# Tools lokal pribadi (simulator Windows, launcher Ubuntu, script pembantu lokal)
+scripts/simulate_pipeline_runner.py
+scripts/run_airflow_ubuntu.sh
+scripts/generate_visualizations.py
+scripts/build_notebook.py
+scripts/generate_drawio.py
+scripts/organize_workspace.py
+
+# Runtime Apache Airflow & database lokal
+airflow_env/
+venv/
+.venv/
+airflow.db
+airflow.db-*
+airflow.cfg
+airflow-webserver.pid
+webserver_config.py
+standalone_admin_password.txt
+logs/
+
+# Cache Python, Jupyter & OS
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+.vscode/
+.DS_Store
+Thumbs.db

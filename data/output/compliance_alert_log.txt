@@ -1,0 +1,23 @@
+================================================================================
+LAPORAN OTOMASI ESKALASI RISIKO FINTECH LENDING (OJK COMPLIANCE ALERT)
+================================================================================
+Generated At      : 2026-11-21 23:43:48
+Triggered By      : Airflow Event-Driven Automation (DAG 2 -> DAG 3)
+Status Skenario   : CRITICAL_TWP90_BREACH
+Instansi Pengawas : OJK_IKNB
+Periode Analisis  : 2025-12
+
+RINGKASAN TEMUAN INDIKATOR RISIKO:
+--------------------------------------------------------------------------------
+1. Tingkat Wanprestasi 90 Hari (TWP90) Nasional : 4.32% (AMBANG BATAS > 4.00%)
+2. Wilayah dengan Kredit Macet Terbesar         : DKI Jakarta
+3. Total Nilai Portofolio Macet Batch          : Rp 80,000,000.00
+
+TINDAKAN OTOMATIS PIPELINE AIRFLOW:
+--------------------------------------------------------------------------------
+[x] Validasi data batch berhasil (DAG 1: ojk_ingest_and_validate_pipeline)
+[x] Perhitungan metrik risiko portofolio selesai (DAG 2: ojk_risk_portfolio_analytics)
+[x] Evaluasi ambang batas otomatis: CONDITIONAL TRIGGER DIAKTIFKAN
+[x] Notifikasi darurat dikirimkan ke Tim Audit, Manajemen Risiko, dan Regulator OJK.
+[x] Pipeline karantina dan pengetatan scoring kredit otomatis disarankan.
+================================================================================
