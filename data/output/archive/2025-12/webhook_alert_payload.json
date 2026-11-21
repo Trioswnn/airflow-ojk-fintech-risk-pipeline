@@ -1,0 +1,23 @@
+{
+  "event_type": "AIRFLOW_COMPLIANCE_ESCALATION",
+  "generated_at": "2026-11-22 00:07:23",
+  "severity": "CRITICAL",
+  "alert_level": "CRITICAL_TWP90_BREACH",
+  "regulatory_body": "OJK_IKNB",
+  "action_required": "RECOVERY_AND_RISK_AUDIT",
+  "channel": "#risk-management-alerts",
+  "dispatch_status": "200 OK (Simulated Delivery)",
+  "metrics": {
+    "periode": "2025-12",
+    "twp90_nasional_pct": 4.32,
+    "twp90_threshold_pct": 4.0,
+    "highest_risk_province": "DKI Jakarta",
+    "highest_risk_age_group": "19-34",
+    "batch_default_idr": 80000000.0
+  },
+  "recommended_controls": [
+    "Perketat scoring kredit pada segmen usia berisiko tinggi",
+    "Evaluasi batas penyaluran sementara wilayah DKI Jakarta",
+    "Kirim laporan eskalasi ke Komite Risiko & OJK IKNB"
+  ]
+}

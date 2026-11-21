@@ -5,26 +5,49 @@ Fokus: Trigger dan Automation Antar-DAG pada Apache Airflow
 Dataset: Data Publikasi Resmi Fintech Lending OJK 2025
 
 DAG 3: ojk_compliance_alert_automation
-Peran: Event-Driven Emergency Alert DAG
-Deskripsi:
-  1. DAG ini TIDAK memiliki jadwal periodik (schedule=None).
-  2. DAG ini HANYA aktif secara otomatis jika di-trigger oleh DAG 2 saat
-     terjadi pelanggaran ambang batas kredit macet (TWP90 > 4.0%).
-  3. Menghasilkan berkas log audit kepatuhan ('data/output/compliance_alert_log.txt').
-  4. Menyimulasikan pengiriman notifikasi eskalasi insiden ke Komite Risiko & OJK.
+Peran: Event-Driven Compliance Alert, Webhook Dispatch & Snapshot Archival
+Alur Task:
+  1. `start_compliance_alert`
+  2. Eksekusi PARALEL mitigasi insiden:
+     - `generate_regulatory_audit_log` -> menulis `data/output/compliance_alert_log.txt`
+     - `dispatch_webhook_notification` -> menulis `data/output/webhook_alert_payload.json`
+  3. `archive_compliance_snapshot`: Mengarsipkan Mart + Audit Log + Webhook JSON
+     secara aman ke `data/output/archive/<periode>/` (bebas race condition).
+  4. `end_compliance_alert`
 =============================================================================
 """
 
-import os
 import csv
+import json
+import os
+import shutil
 from datetime import datetime
 
 from airflow import DAG
-from airflow.operators.python import PythonOperator
 from airflow.operators.empty import EmptyOperator
+from airflow.operators.python import PythonOperator
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT_DIR = os.path.join(BASE_DIR, 'data', 'output')
+
+
+def on_task_failure_callback(context):
+    """Callback otomatis mencatat kegagalan task ke log insiden kegagalan pipeline."""
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    log_path = os.path.join(OUTPUT_DIR, 'pipeline_failure_log.txt')
+    ti = context.get('task_instance')
+    dag_obj = context.get('dag')
+    exc = context.get('exception')
+    line = (
+        f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+        f"FAILED dag={getattr(dag_obj, 'dag_id', 'unknown')} "
+        f"task={getattr(ti, 'task_id', 'unknown')} "
+        f"error={repr(exc)}\n"
+    )
+    with open(log_path, 'a', encoding='utf-8') as f:
+        f.write(line)
+    print(f"[FAILURE CALLBACK] {line.strip()}")
+
 
 default_args = {
     'owner': 'kelompok_3_pemrog3',
@@ -33,41 +56,42 @@ default_args = {
     'email_on_failure': False,
     'email_on_retry': False,
     'retries': 0,
+    'on_failure_callback': on_task_failure_callback,
 }
 
 
-def _load_mart_metrics():
-    """Membaca metrik risiko terkini dari Data Mart DAG 2 secara konsisten."""
+def _load_alert_context(context):
+    """Menggabungkan parameter insiden dari Data Mart DAG 2 dan `dag_run.conf`."""
     mart_path = os.path.join(OUTPUT_DIR, 'ojk_portfolio_risk_mart.csv')
     metrics = {}
     if os.path.exists(mart_path):
         with open(mart_path, 'r', encoding='utf-8') as f:
             reader = csv.reader(f)
-            next(reader, None)  # skip header
+            next(reader, None)
             for row in reader:
                 if len(row) >= 2:
                     metrics[row[0]] = row[1]
-    return metrics
+
+    dag_run = context.get('dag_run')
+    run_conf = (dag_run.conf or {}) if dag_run else {}
+    return {
+        'alert_level': run_conf.get('alert_level', 'CRITICAL_TWP90_BREACH'),
+        'regulator': run_conf.get('regulatory_body', 'OJK_IKNB'),
+        'action_required': run_conf.get('action_required', 'RECOVERY_AND_RISK_AUDIT'),
+        'periode': run_conf.get('periode') or metrics.get('periode', '2025-12'),
+        'twp90_nasional': str(run_conf.get('twp90_nasional') or metrics.get('twp90_nasional_pct', '4.32')),
+        'twp90_threshold': str(run_conf.get('twp90_threshold') or metrics.get('twp90_threshold_pct', '4.0')),
+        'top_prov': run_conf.get('top_risk_province') or metrics.get('highest_risk_province', 'DKI Jakarta'),
+        'top_age': run_conf.get('top_risk_age_group') or metrics.get('highest_risk_age_group', '19-34'),
+        'total_default': float(run_conf.get('total_default_idr') or metrics.get('batch_default_idr', 80000000.0)),
+    }
 
 
 def generate_regulatory_audit_log(**context):
-    """Mencatat log audit kepatuhan resmi atas temuan pelanggaran risiko TWP90."""
+    """Cabang Mitigasi 1: Menerbitkan berkas log audit kepatuhan regulasi OJK."""
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     log_path = os.path.join(OUTPUT_DIR, 'compliance_alert_log.txt')
-
-    # Ambil payload konfigurasi yang dikirimkan oleh DAG 2
-    dag_run = context.get('dag_run')
-    dag_run_conf = (dag_run.conf or {}) if dag_run else {}
-    alert_level = dag_run_conf.get('alert_level', 'CRITICAL_TWP90_BREACH')
-    regulator = dag_run_conf.get('regulatory_body', 'OJK_IKNB')
-
-    # Baca data dari Data Mart DAG 2
-    metrics = _load_mart_metrics()
-    twp90_nasional = metrics.get('twp90_nasional_pct', '4.32')
-    periode = metrics.get('periode', '2025-12')
-    top_prov = metrics.get('highest_risk_province', 'DKI Jakarta')
-    total_default = metrics.get('batch_default_idr', '0')
-
+    info = _load_alert_context(context)
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
     log_content = f"""================================================================================
@@ -75,23 +99,24 @@ LAPORAN OTOMASI ESKALASI RISIKO FINTECH LENDING (OJK COMPLIANCE ALERT)
 ================================================================================
 Generated At      : {timestamp}
 Triggered By      : Airflow Event-Driven Automation (DAG 2 -> DAG 3)
-Status Skenario   : {alert_level}
-Instansi Pengawas : {regulator}
-Periode Analisis  : {periode}
+Status Skenario   : {info['alert_level']}
+Instansi Pengawas : {info['regulator']}
+Periode Analisis  : {info['periode']}
 
 RINGKASAN TEMUAN INDIKATOR RISIKO:
 --------------------------------------------------------------------------------
-1. Tingkat Wanprestasi 90 Hari (TWP90) Nasional : {twp90_nasional}% (AMBANG BATAS > 4.00%)
-2. Wilayah dengan Kredit Macet Terbesar         : {top_prov}
-3. Total Nilai Portofolio Macet Batch          : Rp {float(total_default):,.2f}
+1. Tingkat Wanprestasi 90 Hari (TWP90) Nasional : {info['twp90_nasional']}% (AMBANG BATAS > {float(info['twp90_threshold']):.2f}%)
+2. Wilayah dengan Kredit Macet Terbesar         : {info['top_prov']}
+3. Kelompok Usia Kredit Macet Terbesar          : {info['top_age']} tahun
+4. Total Nilai Portofolio Macet Batch           : Rp {info['total_default']:,.2f}
 
 TINDAKAN OTOMATIS PIPELINE AIRFLOW:
 --------------------------------------------------------------------------------
-[x] Validasi data batch berhasil (DAG 1: ojk_ingest_and_validate_pipeline)
-[x] Perhitungan metrik risiko portofolio selesai (DAG 2: ojk_risk_portfolio_analytics)
-[x] Evaluasi ambang batas otomatis: CONDITIONAL TRIGGER DIAKTIFKAN
-[x] Notifikasi darurat dikirimkan ke Tim Audit, Manajemen Risiko, dan Regulator OJK.
-[x] Pipeline karantina dan pengetatan scoring kredit otomatis disarankan.
+[x] Sensor & Ekstraksi Raw Excel OJK selesai (DAG 1)
+[x] 3 Parallel Quality Gates lulus 100% (DAG 1: TaskGroup quality_gates)
+[x] Analitik risiko paralel & Data Mart selesai (DAG 2: ojk_risk_portfolio_analytics)
+[x] Evaluasi ambang batas dinamis: CONDITIONAL TRIGGER DIAKTIFKAN
+[x] Payload webhook alert JSON diterbitkan & arsip snapshot disimpan (DAG 3).
 ================================================================================
 """
 
@@ -99,36 +124,75 @@ TINDAKAN OTOMATIS PIPELINE AIRFLOW:
         f.write(log_content)
 
     print(f"[DAG 3 - Audit Log] Berhasil menerbitkan log insiden -> {log_path}")
-    print(log_content)
     return "Audit Log Generated"
 
 
-def dispatch_notification_channels(**context):
-    """Menyimulasikan pengiriman webhook/alert ke channel komunikasi perusahaan."""
-    metrics = _load_mart_metrics()
-    twp90 = metrics.get('twp90_nasional_pct', '4.32')
-    top_prov = metrics.get('highest_risk_province', 'DKI Jakarta')
-    print(f"[DAG 3 - Notification] Menyiapkan payload HTTP Webhook (TWP90={twp90}%, Fokus={top_prov})...")
-    print("[DAG 3 - Notification] Mengirimkan alert darurat ke Slack #risk-management-alerts...")
-    print("[DAG 3 - Notification] Status Pengiriman: 200 OK (Simulated Dispatch Success).")
-    return "Notification Dispatched"
+def dispatch_webhook_notification(**context):
+    """Cabang Mitigasi 2: Membuat artefak payload HTTP Webhook JSON untuk Komite Risiko."""
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    webhook_path = os.path.join(OUTPUT_DIR, 'webhook_alert_payload.json')
+    info = _load_alert_context(context)
+
+    payload = {
+        'event_type': 'AIRFLOW_COMPLIANCE_ESCALATION',
+        'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'severity': 'CRITICAL',
+        'alert_level': info['alert_level'],
+        'regulatory_body': info['regulator'],
+        'action_required': info['action_required'],
+        'channel': '#risk-management-alerts',
+        'dispatch_status': '200 OK (Simulated Delivery)',
+        'metrics': {
+            'periode': info['periode'],
+            'twp90_nasional_pct': float(info['twp90_nasional']),
+            'twp90_threshold_pct': float(info['twp90_threshold']),
+            'highest_risk_province': info['top_prov'],
+            'highest_risk_age_group': info['top_age'],
+            'batch_default_idr': info['total_default'],
+        },
+        'recommended_controls': [
+            'Perketat scoring kredit pada segmen usia berisiko tinggi',
+            f"Evaluasi batas penyaluran sementara wilayah {info['top_prov']}",
+            'Kirim laporan eskalasi ke Komite Risiko & OJK IKNB',
+        ],
+    }
+
+    with open(webhook_path, 'w', encoding='utf-8') as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
+
+    print(f"[DAG 3 - Webhook] Payload JSON berhasil diterbitkan -> {webhook_path} (200 OK Simulated)")
+    return "Webhook Payload Dispatched"
 
 
-def archive_audit_snapshot(**context):
-    """Memverifikasi kelengkapan artefak luaran sebelum diarsipkan sebagai bukti audit regulasi."""
-    mart_path = os.path.join(OUTPUT_DIR, 'ojk_portfolio_risk_mart.csv')
-    log_path = os.path.join(OUTPUT_DIR, 'compliance_alert_log.txt')
-    if not (os.path.exists(mart_path) and os.path.exists(log_path)):
-        raise FileNotFoundError("Artefak audit (Data Mart / Log Compliance) tidak lengkap untuk diarsipkan!")
-    print(f"[DAG 3 - Archival] Snapshot Data Mart & Log Audit terverifikasi dan diarsipkan di {OUTPUT_DIR}.")
-    return "Snapshot Archived"
+def archive_compliance_snapshot(**context):
+    """Mengarsipkan Data Mart, Log Audit, & Webhook JSON ke folder archive/<periode>/."""
+    info = _load_alert_context(context)
+    periode = info['periode']
+    archive_dir = os.path.join(OUTPUT_DIR, 'archive', periode)
+    os.makedirs(archive_dir, exist_ok=True)
+
+    artifacts = (
+        'ojk_portfolio_risk_mart.csv',
+        'compliance_alert_log.txt',
+        'webhook_alert_payload.json',
+    )
+    copied = []
+    for fname in artifacts:
+        src = os.path.join(OUTPUT_DIR, fname)
+        if not os.path.isfile(src):
+            raise FileNotFoundError(f"Artefak audit tidak ditemukan untuk diarsipkan: {src}")
+        shutil.copy2(src, os.path.join(archive_dir, fname))
+        copied.append(fname)
+
+    print(f"[DAG 3 - Archival] Berhasil mengarsipkan {len(copied)} berkas ke {archive_dir}: {copied}")
+    return f"Archived to {archive_dir}"
 
 
 with DAG(
     dag_id='ojk_compliance_alert_automation',
     default_args=default_args,
-    description='[DAG 3] Automasi Peringatan Kepatuhan Regulasi & Audit (Event-Driven DAG)',
-    schedule=None,  # Dipicu secara kondisional oleh DAG 2
+    description='[DAG 3] Event-Driven Alert: Parallel Audit Log & Webhook Dispatch + Snapshot Archive',
+    schedule=None,
     catchup=False,
     tags=['kelompok_3', 'ojk_fintech', 'alert_dag', 'automation'],
 ) as dag:
@@ -142,19 +206,19 @@ with DAG(
         python_callable=generate_regulatory_audit_log,
     )
 
-    t2_notify = PythonOperator(
-        task_id='dispatch_notification_channels',
-        python_callable=dispatch_notification_channels,
+    t2_webhook = PythonOperator(
+        task_id='dispatch_webhook_notification',
+        python_callable=dispatch_webhook_notification,
     )
 
     t3_archive = PythonOperator(
-        task_id='archive_audit_snapshot',
-        python_callable=archive_audit_snapshot,
+        task_id='archive_compliance_snapshot',
+        python_callable=archive_compliance_snapshot,
     )
 
     end_task = EmptyOperator(
         task_id='end_compliance_alert'
     )
 
-    # Dependency Graph Alur Task
-    start_task >> t1_audit_log >> t2_notify >> t3_archive >> end_task
+    # Dependensi Graph: Audit Log & Webhook paralel -> lalu konvergensi ke Archive
+    start_task >> [t1_audit_log, t2_webhook] >> t3_archive >> end_task

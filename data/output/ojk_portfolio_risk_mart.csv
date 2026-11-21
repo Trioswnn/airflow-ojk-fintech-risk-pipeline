@@ -1,8 +1,10 @@
 metric,value,keterangan
 periode,2025-12,Periode Data OJK
 twp90_nasional_pct,4.32,Rasio Kredit Macet Nasional OJK
+twp90_threshold_pct,4.0,Ambang Batas Toleransi Regulasi Dinamis
 batch_total_loans,1000,Jumlah Akun Pinjaman Terdaftar
 batch_disbursed_idr,5000000000.0,Total Penyaluran Pinjaman (IDR)
 batch_default_idr,80000000.0,Total Portofolio Macet (IDR)
 batch_twp90_pct,2.1,Tingkat Wanprestasi 90 Hari Batch
 highest_risk_province,DKI Jakarta,"Provinsi Kredit Macet Tertinggi: Rp 20,500,000"
+highest_risk_age_group,19-34,"Kelompok Usia Macet Tertinggi: Rp 68,000,000 | Tier TINGGI: DKI Jakarta, Jawa Barat, Jawa Timur"
